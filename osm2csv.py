@@ -11,7 +11,9 @@ import cerberus
 
 import schema
 
-OSM_PATH = "beijing_china.osm"
+import clean   # 导入清洗模块
+
+OSM_PATH = "sample_beijing_china.osm"
 
 NODES_PATH = "nodes.csv"
 NODE_TAGS_PATH = "nodes_tags.csv"
@@ -51,10 +53,13 @@ def shape_element(element, node_attr_fields=NODE_FIELDS, way_attr_fields=WAY_FIE
         else:
             ttype = 'regular'     
             tkey = tag.attrib['k']
-        tags.append({'id': element.attrib['id'],
-                      'key': tkey,
-                      'value': tag.attrib['v'],
-                      'type': ttype})
+            
+        value = clean.update_value(tkey, tag.attrib['v'])    # 清洗value值
+        if value != '' :    # 如果清洗后value为空字符，则说明原数据错误，将不被记录
+            tags.append({'id': element.attrib['id'],
+                        'key': tkey,
+                        'value': value,
+                        'type': ttype})
     
     if element.tag == 'node':
         for field in NODE_FIELDS:
@@ -150,11 +155,9 @@ def process_map(file_in, validate):
 
 
 
-'''
 if __name__ == '__main__':
 
     # Note: Validation is ~ 10X slower. For the project consider using a small
     # sample of the map when validating.
     process_map(OSM_PATH, validate=False)
 
-'''

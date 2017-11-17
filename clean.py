@@ -3,10 +3,29 @@
 
 # Python 3.6
 
-import pandas as pd
 import re
+import xml.etree.cElementTree as ET
 
-#-------- 清洗电话号码 -----------
+
+sOSMFILE = 'sample_beijing_china.osm'
+OSMFILE = 'beijing_china.osm'
+
+       
+#-------- 清洗电话号码 -----------       
+       
+def is_phone_standard(phone_number):
+    '''判断电话号码是否符合标准格式。'''
+
+    phone_pattern = r'^\+86 10 \d{8}$'
+    mobile_phone_pattern = r'^\+86 \d{11}$'
+    special_pattern = r'^\+86 400\d{7}$'
+    if (re.fullmatch(phone_pattern, phone_number)  \
+        or re.fullmatch(mobile_phone_pattern, phone_number) \
+        or re.fullmatch(special_pattern, phone_number)):
+        return True
+    else:
+        return False
+
 
 def is_mobile_phone(value):
     '''判断是否是移动电话号码, 是则返回True，不是返回False。
@@ -23,8 +42,8 @@ def is_mobile_phone(value):
         return False
         
 
-def style_phone_number(phone_value):
-    '''将不符合标准格式的电话号码转换成标准格式。
+def update_phone_number(phone_value):
+    '''清洗单个电话号码，将不符合标准格式的电话号码转换成标准格式，不能转换的返回空字符。
     标准格式定义成：国家编号 + [区号] + 号码。'''
 
     # 去除非数字的字符
@@ -49,94 +68,105 @@ def style_phone_number(phone_value):
     elif (digit_value[:-7], len(digit_value)) in special_style:
         styled_value = '+86 ' + digit_value[-10:]
     else: 
-        styled_value = digit_value
+        styled_value = ''  # 如果不能标准化，则返回空字符串
 
     return styled_value
-    
-    
-def is_phone_styled(phone_number):
-    '''判断电话号码是否符合标准格式。'''
 
-    phone_pattern = r'^\+86 10 \d{8}$'
-    mobile_phone_pattern = r'^\+86 \d{11}$'
-    special_pattern = r'^\+86 400\d{7}$'
-    if (re.fullmatch(phone_pattern, phone_number)  \
-        or re.fullmatch(mobile_phone_pattern, phone_number) \
-        or re.fullmatch(special_pattern, phone_number)):
-        return True
-    else:
-        return False
-        
-        
-def process_phone(df):
-    '''清洗数据中的电话号码。
-    返回的结果是被丢弃的不正确的电话号码，除此之外其他号码都被标准格式替代。'''
 
-    # 用统一的格式替换原数据中各种类型的电话号码
-    # 针对用分号分隔的多个电话号码，需要特殊对待
-    for index, row in df.loc[df.key=='phone'].iterrows():
-        phone_value = row['value']
-        if len(phone_value) >= 17:
-            if phone_value.find('/') > 0:          
-                phone_list = phone_value.split('/')
-                phone_number = ';'.join(style_phone_number(x) for x in phone_list)
-            elif phone_value.find(';') > 0:
-                phone_list = phone_value.split(';')
-                phone_number = ';'.join(style_phone_number(x) for x in phone_list)
-            elif phone_value.find('；') > 0:
-                phone_list = phone_value.split('；')
-                phone_number = ';'.join(style_phone_number(x) for x in phone_list)        
-            else:
-                phone_number = style_phone_number(phone_value)
-        else:
-            phone_number = style_phone_number(phone_value)
 
-        df.loc[index, 'value'] = phone_number
+def update_phone(phone_value): 
+    '''清洗单个或多个电话号码的情况'''
     
+    phone_number = ''
 
-    # 返回不正确的电话号码，并将它们从数据中删除
-    wrong_number = []
-    for index, row in df.loc[df.key=='phone'].iterrows():  
-        phone_number = row['value']
-        if phone_number.find(';') > 0:
-            phone_list = phone_number.split(';') 
-            for number in phone_list:
-                if not is_phone_styled(number):
-                    wrong_number.append(number)
-                    df.drop(index, inplace=True)
-        else:
-            if not is_phone_styled(phone_number):
-                wrong_number.append(phone_number)
-                df.drop(index, inplace=True)    
- 
-        
-    return wrong_number
-    
-    
-    
-    
- #--------- 清洗邮政编码 ---------------   
-    
-def process_postcode(df):
-    '''清洗数据中的邮政编码。
-    返回值是被丢弃的错误的邮编。 '''
+    if len(phone_value) >= 17:   # 处理可能的多个电话号码的情况
+        if phone_value.find('/') > 0:          
+            phone_list = phone_value.split('/')
+            phone_number = ';'.join(update_phone_number(x) for x in phone_list)
+        elif phone_value.find(';') > 0:
+            phone_list = phone_value.split(';')
+            phone_number = ';'.join(update_phone_number(x) for x in phone_list)
+        elif phone_value.find('；') > 0:
+            phone_list = phone_value.split('；')
+            phone_number = ';'.join(update_phone_number(x) for x in phone_list)        
+        else:  
+            phone_number = update_phone_number(phone_value)            
+    else:  # 处理单个电话号码
+        phone_number = update_phone_number(phone_value)
 
-    wrong_list = []
+    if phone_number in [';', ';;', ';;;']:  # 如果多个号码均为空（不能被标准化），则返回空字符
+        phone_number = ''
+            
+    return phone_number
+     
+
+
+
+def audit_phone(filename):
+    '''审查文件中的电话号码是否符合标准，返回不符合标准的号码'''
+    
+    osm_file = open(filename, 'r')
+    wrong_numbers = []   # 记录不符合标准的号码
+    
+    for event, elem in ET.iterparse(osm_file):
+    
+        if  elem.tag == 'tag':   # 获取tag的元素
+            if elem.attrib['k'] in ['phone', 'contact:phone']:
+                phone_number = elem.attrib['v']
+                if not is_phone_standard(phone_number):  # 判断是否符合标准
+                    wrong_numbers.append(phone_number)
+
+    return wrong_numbers
+
+
+
+
+
+#--------- 清洗邮政编码 ---------------  
+
+
+def is_postcode(code):
+    '''判断是否符合北京邮政编码格式，是返回True，不是返回False。'''
+
     # 定义邮编的正则表达式，北京地区邮编以100、101、102开头，共6位数字
     postcode_parttern = r'^10[0-2]\d{3}$'
     
-    # 判断邮编是否符合以上定义的正则表达式，不符合则从数据中删除
-    for index, row in df[df.key=='postcode'].iterrows():
-        code = row['value']
-        if not re.fullmatch(postcode_parttern, code):
-            wrong_list.append(code)
-            df.drop(index, inplace=True)
-            
-    return wrong_list    
+    return re.fullmatch(postcode_parttern, code)
     
     
+    
+    
+def update_postcode(code):
+    '''清洗邮编数据，如果符合标准，原样返回；如果不符合标准，则返回空字符。'''
+    
+    new_code = code
+    if not is_postcode(code):
+        new_code = ''
+    
+    return new_code    
+    
+    
+    
+    
+def audit_postcode(filename):
+    '''审查数据中的邮政编码，返回值是错误的邮编。'''
 
-#--------- 清洗营业时间数据-------------
+    wrong_list = []
+    osm_file = open(filename, 'r')
+    
+    for event, elem in ET.iterparse(osm_file):
+        if  elem.tag == 'tag':   # 获取tag的元素
+            if elem.attrib['k'] == 'addr:postcode':
+                code =  elem.attrib['v']
+                if not is_postcode(code):  # 是否符合邮编格式
+                    wrong_list.append(code)
+    
+    return wrong_list
+    
+    
+ 
+ 
+ #--------- 清洗营业时间数据-------------
     
 
 def is_hour(value): 
@@ -174,49 +204,10 @@ def is_hour(value):
         return True
     else:
         return False
-      
-
-
-def find_mess_hour(df):
-    '''在数据中查找混乱的时间数据，返回相应的索引和对应的值。'''
-
-    wrong_index = []
-    wrong_hour = []
-    for index, row in df[df.key=='opening_hours'].iterrows():
-        hour = row['value']
-        if hour.find(';') > 0:
-            hour_list = hour.split(';')
-            for h in hour_list:
-                if not is_hour(h.strip()):
-                    wrong_hour.append(h)
-                    wrong_index.append(index)
-        else:
-            if not is_hour(hour):
-                wrong_hour.append(hour)
-                wrong_index.append(index)
-
-    return wrong_index, wrong_hour
-                        
+                              
                 
+        
                 
-def process_multi_hours(df):
-    '''处理包含多个时间的情况。'''
-
-    h = '\d{1,2}:\d{1,2}'
-    p1 = h + '-' + h
-    for index, row in df[df.key=='opening_hours'].iterrows():
-        hour = row['value']
-        find_list = re.findall(p1, hour)
-            
-        if (hour.find(';') < 0) and ((hour.find(',') < 0)) and (len(find_list) > 1):
-            hour_list = []
-            head_list = re.split(p1, hour)
-            for i,s in enumerate(find_list):
-                hour_list.append(head_list[i].strip() + ' ' + s)                
-            df.loc[index, 'value'] = ';'.join(hour_list)
-                
-
-
 def style_hour(string):
     '''统一时间格式。'''
 
@@ -319,70 +310,109 @@ def style_hour(string):
     wp2 = h + ' - ' + h
     wp3 = '\d{1,2}:\s\d{1,2}-\d{1,2}:\s\d{1,2}'
     if re.match(wp2, string) or re.match(wp3, string):
-        string = ''.join(string.split(' '))
-            
+        string = ''.join(string.split(' '))         
         
     return string.strip()
 
+
+
+
+def update_hour(hour):
+    '''清洗营业时间数据，将之统一成标准格式。'''
+    
+    if hour.find(';') > 0: #处理用分号分隔的时间数据
+        hour_list = hour.split(';')
+        new_hour = ';'.join(style_hour(h) for h in hour_list)
+        
+    else:
+        new_hour = style_hour(hour)
+        if not is_hour(new_hour):
+            new_hour = ''
+    
+    return new_hour
     
     
-def process_opening_hours(df):
-    '''清洗数据中的营业时间，统一成特定的格式；将不能统一的数据丢弃，并作为返回结果。'''
+def audit_hour(filename):
+    '''审查营业时间数据，返回不符合标准格式的数据。'''
     
-    process_multi_hours(df)
+    osm_file = open(filename, 'r')
+    wrong_list = []   # 记录不符合标准的数据
     
-    for index, row in df[df.key=='opening_hours'].iterrows():
-        hour = row['value']
-        if hour.find(';') > 0:
-            hour_list = hour.split(';')
-            for h in hour_list:
-                if not is_hour(h.strip()):
-                    df.loc[index, 'value'] = style_hour(h)
-        else:
-            if not is_hour(hour):
-                df.loc[index, 'value'] = style_hour(hour)
+    for event, elem in ET.iterparse(osm_file):
     
-    wrong_index, wrong_hour = find_mess_hour(df)
-    
-    df.drop(wrong_index, inplace=True)
-    
-    return wrong_hour
+        if  elem.tag == 'tag':   # 获取tag的元素
+            if elem.attrib['k'] == 'opening_hours':
+                hour = elem.attrib['v']
+                
+                if hour.find(';') > 0: #处理用分号分隔的时间数据
+                    hour_list = hour.split(';')
+                    for h in hour_list:
+                        if not is_hour(h.strip()):
+                            wrong_list.append(h)
+                else:               
+                    if not is_hour(hour):  # 判断是否符合标准
+                        wrong_list.append(hour)
+
+    return wrong_list
 
               
               
-
+ 
+ 
+ 
+ 
+ 
+ 
 #---------- 清洗门牌号码 -------------
-    
-def process_house_number(df):
-    '''清洗数据中的门牌号码。
-    如果housenumber字段中不包含数字，则认为是错误的门牌，会被丢弃。'''
 
-    wrong_index = []
-    wrong_list = []
-    for index, row in df[df.key=='housenumber'].iterrows():
-        house = row['value']
-        if not re.search('\d', house):  # 判断是否包含数字
-            wrong_index.append(index)
-            wrong_list.append(house)
+def is_house_number(value):
+    '''如果输入值不包含数字，则认为是不正确的门牌，返回False；否则返回True。'''
     
-    df.drop(wrong_index, inplace=True)   # 删除数据中错误的门牌号码
+    return re.search('\d', value)  # 是否包含数字
+        
+
+
+
+def update_house_number(value):
+    '''清洗门牌数据，如果不包含数字则返回空字符，否则原样返回。'''
+
+    house_number = value
+    if not is_house_number(value): 
+        house_number = ''
+        
+    return house_number
+
+
+     
+def audit_house_number(filename):
+    '''审查数据中的门牌号，返回值是错误的门牌号。'''
+
+    wrong_list = []
+    osm_file = open(filename, 'r')
+    
+    for event, elem in ET.iterparse(osm_file):
+        if  elem.tag == 'tag':   # 获取tag的元素
+            if elem.attrib['k'] == 'addr:housenumber':
+                value =  elem.attrib['v']
+                if not is_house_number(value):  
+                    wrong_list.append(value)
     
     return wrong_list
-    
-    
+ 
+ 
 
-#--------------- 补充缺失的name属性值 -----------------
+# ----------- 整体清洗 ----------
 
-def process_name(df):
-    '''当同一id下，存在zh属性却不存在name属性时， 增加name属性值，其值等同于zh的值。'''
 
-    groups = df.groupby('id')   # 根据id将数据分组
-    
-    for iid, group in groups:
-        if (not (group.key=='name').any()) and (group.key=='zh').any():
-            name = group.loc[group.key=='zh', 'value']
-            new_row = pd.DataFrame({'id': iid, 'key': 'name', 'value':name, 'type': 'regular'})
-            df = df.append(new_row, ignore_index=True)
-    
-    return df
-    
+def update_value(key, value):
+    if key == 'phone':
+        return update_phone(value)
+    elif key == 'postcode':
+        return update_postcode(value)
+    elif key == 'housenumber':
+        return update_house_number(value)
+    elif key == 'opening_hours':
+        return update_hour(value)
+    else:
+        return value
+
